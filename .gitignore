@@ -4,25 +4,62 @@ node_modules/
 # Build output
 build/
 dist/
+*.tsbuildinfo
 
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
 
 # Environment variables
 .env*
+.env.local
+.env.*.local
 
 # OS files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Editor directories and files
 .vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
 *.swp
 *.swo
+*~
+.project
+.classpath
+
+# IDE specific files
+.history/
+.vim/
 
 # Coverage directory
 coverage/
+.nyc_output/
+
+# Test results
+test-results/
+junit.xml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Performance profiling
+*.prof
+profiling/

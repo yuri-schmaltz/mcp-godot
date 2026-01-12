@@ -1,4 +1,4 @@
-import fs from 'fs-extra';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -12,7 +12,10 @@ fs.chmodSync(path.join(__dirname, '..', 'build', 'index.js'), '755');
 // Copy the scripts directory to the build directory
 try {
   // Ensure the build/scripts directory exists
-  fs.ensureDirSync(path.join(__dirname, '..', 'build', 'scripts'));
+  const scriptsDir = path.join(__dirname, '..', 'build', 'scripts');
+  if (!fs.existsSync(scriptsDir)) {
+    fs.mkdirSync(scriptsDir, { recursive: true });
+  }
   
   // Copy the godot_operations.gd file
   fs.copyFileSync(

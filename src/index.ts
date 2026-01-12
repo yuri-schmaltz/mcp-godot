@@ -23,11 +23,18 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
+import { Logger } from './logger.js';
+import { Telemetry } from './telemetry.js';
+
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
 
 const execAsync = promisify(exec);
+
+// Initialize logger and telemetry
+const logger = new Logger(DEBUG_MODE);
+const telemetry = new Telemetry();
 
 // Derive __filename and __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -49,7 +56,6 @@ interface GodotServerConfig {
   godotPath?: string;
   debugMode?: boolean;
   godotDebugMode?: boolean;
-  strictPathValidation?: boolean; // New option to control path validation behavior
 }
 
 /**
@@ -60,6 +66,15 @@ interface OperationParams {
 }
 
 /**
+ * Cached path validation with TTL (Time To Live)
+ */
+interface PathValidationCache {
+  isValid: boolean;
+  cachedAt: number;
+  ttl: number; // milliseconds
+}
+
+/**
  * Main server class for the Godot MCP server
  */
 class GodotServer {
@@ -67,8 +82,8 @@ class GodotServer {
   private activeProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
-  private validatedPaths: Map<string, boolean> = new Map();
-  private strictPathValidation: boolean = false;
+  private validatedPaths: Map<string, PathValidationCache> = new Map();
+  private readonly PATH_CACHE_TTL: number = 3600000; // 1 hour in milliseconds
 
   /**
    * Parameter name mappings between snake_case and camelCase
@@ -114,15 +129,12 @@ class GodotServer {
       if (config.godotDebugMode !== undefined) {
         godotDebugMode = config.godotDebugMode;
       }
-      if (config.strictPathValidation !== undefined) {
-        this.strictPathValidation = config.strictPathValidation;
-      }
 
       // Store and validate custom Godot path if provided
       if (config.godotPath) {
         const normalizedPath = normalize(config.godotPath);
         this.godotPath = normalizedPath;
-        this.logDebug(`Custom Godot path provided: ${this.godotPath}`);
+        logger.debug('GodotServer', `Custom Godot path provided: ${this.godotPath}`);
 
         // Validate immediately with sync check
         if (!this.isValidGodotPathSync(this.godotPath)) {
@@ -134,7 +146,7 @@ class GodotServer {
 
     // Set the path to the operations script
     this.operationsScriptPath = join(__dirname, 'scripts', 'godot_operations.gd');
-    if (debugMode) console.error(`[DEBUG] Operations script path: ${this.operationsScriptPath}`);
+    if (debugMode) logger.debug('GodotServer', `Operations script path: ${this.operationsScriptPath}`);
 
     // Initialize the MCP server
     this.server = new Server(
@@ -153,7 +165,7 @@ class GodotServer {
     this.setupToolHandlers();
 
     // Error handling
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
+    this.server.onerror = (error) => logger.error('MCP', String(error));
 
     // Cleanup on exit
     process.on('SIGINT', async () => {
@@ -163,23 +175,13 @@ class GodotServer {
   }
 
   /**
-   * Log debug messages if debug mode is enabled
-   * Using stderr instead of stdout to avoid interfering with JSON-RPC communication
-   */
-  private logDebug(message: string): void {
-    if (DEBUG_MODE) {
-      console.error(`[DEBUG] ${message}`);
-    }
-  }
-
-  /**
    * Create a standardized error response with possible solutions
    */
   private createErrorResponse(message: string, possibleSolutions: string[] = []): any {
     // Log the error
-    console.error(`[SERVER] Error response: ${message}`);
+    logger.error('SERVER', `Error response: ${message}`);
     if (possibleSolutions.length > 0) {
-      console.error(`[SERVER] Possible solutions: ${possibleSolutions.join(', ')}`);
+      logger.error('SERVER', `Possible solutions: ${possibleSolutions.join(', ')}`);
     }
 
     const response: any = {
@@ -224,10 +226,10 @@ class GodotServer {
    */
   private isValidGodotPathSync(path: string): boolean {
     try {
-      this.logDebug(`Quick-validating Godot path: ${path}`);
+      logger.debug('GodotServer', `Quick-validating Godot path: ${path}`);
       return path === 'godot' || existsSync(path);
     } catch (error) {
-      this.logDebug(`Invalid Godot path: ${path}, error: ${error}`);
+      logger.debug('GodotServer', `Invalid Godot path: ${path}, error: ${error}`);
       return false;
     }
   }
@@ -236,18 +238,34 @@ class GodotServer {
    * Validate if a Godot path is valid and executable
    */
   private async isValidGodotPath(path: string): Promise<boolean> {
-    // Check cache first
+    // Check cache first (with TTL)
     if (this.validatedPaths.has(path)) {
-      return this.validatedPaths.get(path)!;
+      const cached = this.validatedPaths.get(path)!;
+      const now = Date.now();
+      const age = now - cached.cachedAt;
+
+      if (age < cached.ttl) {
+        // Cache is still valid
+        logger.debug('GodotServer', `Using cached validation for path: ${path}`);
+        return cached.isValid;
+      } else {
+        // Cache expired, remove it
+        logger.debug('GodotServer', `Cache expired for path: ${path}, re-validating`);
+        this.validatedPaths.delete(path);
+      }
     }
 
     try {
-      this.logDebug(`Validating Godot path: ${path}`);
+      logger.debug('GodotServer', `Validating Godot path: ${path}`);
 
       // Check if the file exists (skip for 'godot' which might be in PATH)
       if (path !== 'godot' && !existsSync(path)) {
-        this.logDebug(`Path does not exist: ${path}`);
-        this.validatedPaths.set(path, false);
+        logger.debug('GodotServer', `Path does not exist: ${path}`);
+        this.validatedPaths.set(path, {
+          isValid: false,
+          cachedAt: Date.now(),
+          ttl: this.PATH_CACHE_TTL,
+        });
         return false;
       }
 
@@ -255,42 +273,56 @@ class GodotServer {
       const command = path === 'godot' ? 'godot --version' : `"${path}" --version`;
       await execAsync(command);
 
-      this.logDebug(`Valid Godot path: ${path}`);
-      this.validatedPaths.set(path, true);
+      logger.debug('GodotServer', `Valid Godot path: ${path}`);
+      this.validatedPaths.set(path, {
+        isValid: true,
+        cachedAt: Date.now(),
+        ttl: this.PATH_CACHE_TTL,
+      });
       return true;
     } catch (error) {
-      this.logDebug(`Invalid Godot path: ${path}, error: ${error}`);
-      this.validatedPaths.set(path, false);
+      logger.debug('GodotServer', `Invalid Godot path: ${path}, error: ${error}`);
+      this.validatedPaths.set(path, {
+        isValid: false,
+        cachedAt: Date.now(),
+        ttl: this.PATH_CACHE_TTL,
+      });
       return false;
     }
   }
 
   /**
    * Detect the Godot executable path based on the operating system
+   * Requires explicit GODOT_PATH or auto-detection from common locations
+   * Fails fast with helpful error message if not found
    */
-  private async detectGodotPath() {
+  private async detectGodotPath(): Promise<void> {
     // If godotPath is already set and valid, use it
     if (this.godotPath && await this.isValidGodotPath(this.godotPath)) {
-      this.logDebug(`Using existing Godot path: ${this.godotPath}`);
+      logger.debug('GodotServer', `Using existing Godot path: ${this.godotPath}`);
       return;
     }
 
-    // Check environment variable next
+    // Priority 1: Check environment variable
     if (process.env.GODOT_PATH) {
       const normalizedPath = normalize(process.env.GODOT_PATH);
-      this.logDebug(`Checking GODOT_PATH environment variable: ${normalizedPath}`);
+      logger.debug('GodotServer', `Checking GODOT_PATH environment variable: ${normalizedPath}`);
       if (await this.isValidGodotPath(normalizedPath)) {
         this.godotPath = normalizedPath;
-        this.logDebug(`Using Godot path from environment: ${this.godotPath}`);
+        logger.debug('GodotServer', `Using Godot path from environment: ${this.godotPath}`);
         return;
       } else {
-        this.logDebug(`GODOT_PATH environment variable is invalid`);
+        // GODOT_PATH is set but invalid — FAIL FAST
+        logger.error('SERVER', 'ERROR: GODOT_PATH environment variable is set but invalid');
+        logger.error('SERVER', `GODOT_PATH="${process.env.GODOT_PATH}"`);
+        logger.error('SERVER', 'Path does not exist or is not executable');
+        process.exit(1);
       }
     }
 
-    // Auto-detect based on platform
+    // Priority 2: Auto-detect from common locations
     const osPlatform = process.platform;
-    this.logDebug(`Auto-detecting Godot path for platform: ${osPlatform}`);
+    logger.debug('GodotServer', `Auto-detecting Godot path for platform: ${osPlatform}`);
 
     const possiblePaths: string[] = [
       'godot', // Check if 'godot' is in PATH first
@@ -327,33 +359,25 @@ class GodotServer {
       const normalizedPath = normalize(path);
       if (await this.isValidGodotPath(normalizedPath)) {
         this.godotPath = normalizedPath;
-        this.logDebug(`Found Godot at: ${normalizedPath}`);
+        logger.debug('GodotServer', `Found Godot at: ${normalizedPath}`);
         return;
       }
     }
 
-    // If we get here, we couldn't find Godot
-    this.logDebug(`Warning: Could not find Godot in common locations for ${osPlatform}`);
-    console.error(`[SERVER] Could not find Godot in common locations for ${osPlatform}`);
-    console.error(`[SERVER] Set GODOT_PATH=/path/to/godot environment variable or pass { godotPath: '/path/to/godot' } in the config to specify the correct path.`);
-
-    if (this.strictPathValidation) {
-      // In strict mode, throw an error
-      throw new Error(`Could not find a valid Godot executable. Set GODOT_PATH or provide a valid path in config.`);
-    } else {
-      // Fallback to a default path in non-strict mode; this may not be valid and requires user configuration for reliability
-      if (osPlatform === 'win32') {
-        this.godotPath = normalize('C:\\Program Files\\Godot\\Godot.exe');
-      } else if (osPlatform === 'darwin') {
-        this.godotPath = normalize('/Applications/Godot.app/Contents/MacOS/Godot');
-      } else {
-        this.godotPath = normalize('/usr/bin/godot');
-      }
-
-      this.logDebug(`Using default path: ${this.godotPath}, but this may not work.`);
-      console.error(`[SERVER] Using default path: ${this.godotPath}, but this may not work.`);
-      console.error(`[SERVER] This fallback behavior will be removed in a future version. Set strictPathValidation: true to opt-in to the new behavior.`);
-    }
+    // Priority 3: Not found anywhere — FAIL with helpful error message
+    logger.error('SERVER', 'ERROR: Godot executable not found');
+    logger.error('SERVER', '');
+    logger.error('SERVER', 'Tried the following locations:');
+    possiblePaths.forEach((p) => logger.error('SERVER', `  - ${p}`));
+    logger.error('SERVER', '');
+    logger.error('SERVER', 'SOLUTIONS:');
+    logger.error('SERVER', '  1. Install Godot from https://godotengine.org/download');
+    logger.error('SERVER', '  2. Set the GODOT_PATH environment variable:');
+    logger.error('SERVER', '     export GODOT_PATH=/path/to/godot');
+    logger.error('SERVER', '  3. Ensure Godot is in your system PATH');
+    logger.error('SERVER', '  4. For snap: sudo snap install godot --classic');
+    logger.error('SERVER', '');
+    process.exit(1);
   }
 
   /**
@@ -371,11 +395,11 @@ class GodotServer {
     const normalizedPath = normalize(customPath);
     if (await this.isValidGodotPath(normalizedPath)) {
       this.godotPath = normalizedPath;
-      this.logDebug(`Godot path set to: ${normalizedPath}`);
+      logger.debug('GodotServer', `Godot path set to: ${normalizedPath}`);
       return true;
     }
 
-    this.logDebug(`Failed to set invalid Godot path: ${normalizedPath}`);
+    logger.debug('GodotServer', `Failed to set invalid Godot path: ${normalizedPath}`);
     return false;
   }
 
@@ -383,9 +407,9 @@ class GodotServer {
    * Clean up resources when shutting down
    */
   private async cleanup() {
-    this.logDebug('Cleaning up resources');
+    logger.debug('GodotServer', 'Cleaning up resources');
     if (this.activeProcess) {
-      this.logDebug('Killing active Godot process');
+      logger.debug('GodotServer', 'Killing active Godot process');
       this.activeProcess.process.kill();
       this.activeProcess = null;
     }
@@ -477,18 +501,21 @@ class GodotServer {
     params: OperationParams,
     projectPath: string
   ): Promise<{ stdout: string; stderr: string }> {
-    this.logDebug(`Executing operation: ${operation} in project: ${projectPath}`);
-    this.logDebug(`Original operation params: ${JSON.stringify(params)}`);
+    const telemetryId = telemetry.startOperation(operation);
+    
+    logger.debug('GodotServer', `Executing operation: ${operation} in project: ${projectPath}`);
+    logger.debug('GodotServer', `Original operation params: ${JSON.stringify(params)}`);
 
     // Convert camelCase parameters to snake_case for Godot script
     const snakeCaseParams = this.convertCamelToSnakeCase(params);
-    this.logDebug(`Converted snake_case params: ${JSON.stringify(snakeCaseParams)}`);
+    logger.debug('GodotServer', `Converted snake_case params: ${JSON.stringify(snakeCaseParams)}`);
 
 
     // Ensure godotPath is set
     if (!this.godotPath) {
       await this.detectGodotPath();
       if (!this.godotPath) {
+        telemetry.endOperation(telemetryId, 'Could not find Godot path');
         throw new Error('Could not find a valid Godot executable path');
       }
     }
@@ -523,12 +550,15 @@ class GodotServer {
         ...debugArgs,
       ].join(' ');
 
-      this.logDebug(`Command: ${cmd}`);
+      logger.debug('GodotServer', `Command: ${cmd}`);
 
       const { stdout, stderr } = await execAsync(cmd);
+      const metric = telemetry.endOperation(telemetryId);
+      logger.info('GodotServer', `Operation ${operation} completed in ${metric?.duration}ms`);
 
       return { stdout, stderr };
     } catch (error: unknown) {
+      telemetry.endOperation(telemetryId, String(error));
       // If execAsync throws, it still contains stdout/stderr
       if (error instanceof Error && 'stdout' in error && 'stderr' in error) {
         const execError = error as Error & { stdout: string; stderr: string };
@@ -589,7 +619,7 @@ class GodotServer {
 
       return structure;
     } catch (error) {
-      this.logDebug(`Error getting project structure: ${error}`);
+      logger.debug('GodotServer', `Error getting project structure: ${error}`);
       return { error: 'Failed to get project structure' };
     }
   }
@@ -654,7 +684,7 @@ class GodotServer {
         }
       }
     } catch (error) {
-      this.logDebug(`Error searching directory ${directory}: ${error}`);
+      logger.debug('GodotServer', `Error searching directory ${directory}: ${error}`);
     }
 
     return projects;
@@ -928,7 +958,7 @@ class GodotServer {
 
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      this.logDebug(`Handling tool request: ${request.params.name}`);
+      logger.debug('GodotServer', `Handling tool request: ${request.params.name}`);
       switch (request.params.name) {
         case 'launch_editor':
           return await this.handleLaunchEditor(request.params.arguments);
@@ -1016,7 +1046,7 @@ class GodotServer {
         );
       }
 
-      this.logDebug(`Launching Godot editor for project: ${args.projectPath}`);
+      logger.debug('GodotServer', `Launching Godot editor for project: ${args.projectPath}`);
       const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
         stdio: 'pipe',
       });
@@ -1083,17 +1113,17 @@ class GodotServer {
 
       // Kill any existing process
       if (this.activeProcess) {
-        this.logDebug('Killing existing Godot process before starting a new one');
+        logger.debug('GodotServer', 'Killing existing Godot process before starting a new one');
         this.activeProcess.process.kill();
       }
 
       const cmdArgs = ['-d', '--path', args.projectPath];
       if (args.scene && this.validatePath(args.scene)) {
-        this.logDebug(`Adding scene parameter: ${args.scene}`);
+        logger.debug('GodotServer', `Adding scene parameter: ${args.scene}`);
         cmdArgs.push(args.scene);
       }
 
-      this.logDebug(`Running Godot project: ${args.projectPath}`);
+      logger.debug('GodotServer', `Running Godot project: ${args.projectPath}`);
       const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
       const output: string[] = [];
       const errors: string[] = [];
@@ -1102,7 +1132,7 @@ class GodotServer {
         const lines = data.toString().split('\n');
         output.push(...lines);
         lines.forEach((line: string) => {
-          if (line.trim()) this.logDebug(`[Godot stdout] ${line}`);
+          if (line.trim()) logger.debug('GodotServer', `[Godot stdout] ${line}`);
         });
       });
 
@@ -1110,12 +1140,12 @@ class GodotServer {
         const lines = data.toString().split('\n');
         errors.push(...lines);
         lines.forEach((line: string) => {
-          if (line.trim()) this.logDebug(`[Godot stderr] ${line}`);
+          if (line.trim()) logger.debug('GodotServer', `[Godot stderr] ${line}`);
         });
       });
 
       process.on('exit', (code: number | null) => {
-        this.logDebug(`Godot process exited with code ${code}`);
+        logger.debug('GodotServer', `Godot process exited with code ${code}`);
         if (this.activeProcess && this.activeProcess.process === process) {
           this.activeProcess = null;
         }
@@ -1196,7 +1226,7 @@ class GodotServer {
       );
     }
 
-    this.logDebug('Stopping active Godot process');
+    logger.debug('GodotServer', 'Stopping active Godot process');
     this.activeProcess.process.kill();
     const output = this.activeProcess.output;
     const errors = this.activeProcess.errors;
@@ -1239,7 +1269,7 @@ class GodotServer {
         }
       }
 
-      this.logDebug('Getting Godot version');
+      logger.debug('GodotServer', 'Getting Godot version');
       const { stdout } = await execAsync(`"${this.godotPath}" --version`);
       return {
         content: [
@@ -1283,7 +1313,7 @@ class GodotServer {
     }
 
     try {
-      this.logDebug(`Listing Godot projects in directory: ${args.directory}`);
+      logger.debug('GodotServer', `Listing Godot projects in directory: ${args.directory}`);
       if (!existsSync(args.directory)) {
         return this.createErrorResponse(
           `Directory does not exist: ${args.directory}`,
@@ -1363,7 +1393,7 @@ class GodotServer {
         scanDirectory(projectPath);
         resolve(structure);
       } catch (error) {
-        this.logDebug(`Error getting project structure asynchronously: ${error}`);
+        logger.debug('GodotServer', `Error getting project structure asynchronously: ${error}`);
         resolve({ 
           error: 'Failed to get project structure',
           scenes: 0,
@@ -1423,7 +1453,7 @@ class GodotServer {
         );
       }
   
-      this.logDebug(`Getting project info for: ${args.projectPath}`);
+      logger.debug('GodotServer', `Getting project info for: ${args.projectPath}`);
   
       // Get Godot version
       const execOptions = { timeout: 10000 }; // 10 second timeout
@@ -1440,10 +1470,10 @@ class GodotServer {
         const configNameMatch = projectFileContent.match(/config\/name="([^"]+)"/);
         if (configNameMatch && configNameMatch[1]) {
           projectName = configNameMatch[1];
-          this.logDebug(`Found project name in config: ${projectName}`);
+          logger.debug('GodotServer', `Found project name in config: ${projectName}`);
         }
       } catch (error) {
-        this.logDebug(`Error reading project file: ${error}`);
+        logger.debug('GodotServer', `Error reading project file: ${error}`);
         // Continue with default project name if extraction fails
       }
   
@@ -2156,42 +2186,21 @@ class GodotServer {
   /**
    * Run the MCP server
    */
-  async run() {
+  async run(): Promise<void> {
     try {
       // Detect Godot path before starting the server
+      // This will fail with helpful error message if Godot is not found
       await this.detectGodotPath();
 
-      if (!this.godotPath) {
-        console.error('[SERVER] Failed to find a valid Godot executable path');
-        console.error('[SERVER] Please set GODOT_PATH environment variable or provide a valid path');
-        process.exit(1);
-      }
-
-      // Check if the path is valid
-      const isValid = await this.isValidGodotPath(this.godotPath);
-
-      if (!isValid) {
-        if (this.strictPathValidation) {
-          // In strict mode, exit if the path is invalid
-          console.error(`[SERVER] Invalid Godot path: ${this.godotPath}`);
-          console.error('[SERVER] Please set a valid GODOT_PATH environment variable or provide a valid path');
-          process.exit(1);
-        } else {
-          // In compatibility mode, warn but continue with the default path
-          console.error(`[SERVER] Warning: Using potentially invalid Godot path: ${this.godotPath}`);
-          console.error('[SERVER] This may cause issues when executing Godot commands');
-          console.error('[SERVER] This fallback behavior will be removed in a future version. Set strictPathValidation: true to opt-in to the new behavior.');
-        }
-      }
-
-      console.error(`[SERVER] Using Godot at: ${this.godotPath}`);
+      // At this point, godotPath is guaranteed to be valid
+      logger.info('SERVER', `Using Godot at: ${this.godotPath}`);
 
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
-      console.error('Godot MCP server running on stdio');
+      logger.info('SERVER', 'Godot MCP server running on stdio');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[SERVER] Failed to start:', errorMessage);
+      logger.error('SERVER', `Failed to start: ${errorMessage}`);
       process.exit(1);
     }
   }

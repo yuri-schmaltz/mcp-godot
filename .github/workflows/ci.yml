@@ -1,0 +1,68 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [ 18.x, 20.x ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install --legacy-peer-deps
+
+    - name: Lint
+      run: npm run lint
+
+    - name: Build
+      run: npm run build
+
+    - name: Run smoke tests
+      run: npm test
+
+    - name: Security audit
+      run: npm audit --production --audit-level=moderate
+
+  performance:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install --legacy-peer-deps
+
+    - name: Measure build time
+      run: |
+        echo "### Build Performance" >> $GITHUB_STEP_SUMMARY
+        time npm run build >> build-time.txt 2>&1
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat build-time.txt >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+    - name: Check bundle size
+      run: |
+        SIZE=$(du -h build/index.js | cut -f1)
+        echo "### Bundle Size" >> $GITHUB_STEP_SUMMARY
+        echo "- Build output: $SIZE" >> $GITHUB_STEP_SUMMARY
