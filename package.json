@@ -1,27 +1,29 @@
 {
-  "name": "godot-mcp",
-  "version": "0.1.1",
-  "description": "MCP server for interfacing with Godot game engine. Provides tools for launching the editor, running projects, and capturing debug output.",
+  "name": "@yuri-schmaltz/mcp-godot",
+  "version": "0.1.0",
+  "description": "MCP server for interfacing with the Godot game engine. Provides tools for launching the editor, running projects, capturing debug output, and managing scenes. Maintained fork of Coding-Solo/godot-mcp.",
   "keywords": [
     "godot",
     "mcp",
     "ai",
     "claude",
-    "cline"
+    "cline",
+    "cursor",
+    "yuri-schmaltz"
   ],
-  "homepage": "https://github.com/Coding-Solo/godot-mcp",
+  "homepage": "https://github.com/yuri-schmaltz/mcp-godot",
   "bugs": {
-    "url": "https://github.com/Coding-Solo/godot-mcp/issues"
+    "url": "https://github.com/yuri-schmaltz/mcp-godot/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Coding-Solo/godot-mcp.git"
+    "url": "https://github.com/yuri-schmaltz/mcp-godot.git"
   },
   "license": "MIT",
-  "author": "Solomon Elias <solomon@sippy.ai>",
+  "author": "Yuri Schmaltz",
   "type": "module",
   "bin": {
-    "godot-mcp": "./build/index.js"
+    "mcp-godot": "./build/index.js"
   },
   "files": [
     "build"
@@ -34,8 +36,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
-    "axios": "^1.7.9",
-    "fs-extra": "^11.2.0"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
