@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize } from 'path';
-import { existsSync, readdirSync, mkdirSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -22,11 +22,24 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
+import { ToolSchemas, formatZodIssues } from './schemas.js';
+
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
+const MAX_OUTPUT_LINES: number = 5000; // Cap per-stream buffer to prevent OOM on long-running Godot processes
+const OPERATION_TIMEOUT_MS: number = 30_000; // Cap for one-shot Godot operations (scene/UID/resource edits)
 
 const execFileAsync = promisify(execFile);
+
+/** Push lines onto a bounded ring-buffer-style log array, keeping only the most recent entries. */
+function appendBounded(buffer: string[], lines: string[]): void {
+  buffer.push(...lines);
+  const overflow = buffer.length - MAX_OUTPUT_LINES;
+  if (overflow > 0) {
+    buffer.splice(0, overflow);
+  }
+}
 
 // Derive __filename and __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -138,7 +151,7 @@ class GodotServer {
     // Initialize the MCP server
     this.server = new Server(
       {
-        name: 'godot-mcp',
+        name: '@yuri-schmaltz/mcp-godot',
         version: '0.1.0',
       },
       {
@@ -525,7 +538,11 @@ class GodotServer {
 
       this.logDebug(`Executing: ${this.godotPath} ${args.join(' ')}`);
 
-      const { stdout, stderr } = await execFileAsync(this.godotPath!, args);
+      const { stdout, stderr } = await execFileAsync(
+        this.godotPath!,
+        args,
+        { timeout: OPERATION_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024 }
+      );
 
       return { stdout: stdout ?? '', stderr: stderr ?? '' };
     } catch (error: unknown) {
@@ -929,7 +946,25 @@ class GodotServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       this.logDebug(`Handling tool request: ${request.params.name}`);
-      switch (request.params.name) {
+
+      // Validate arguments against the tool's Zod schema (camelCase-normalized form).
+      // The handler still re-normalizes; this is idempotent and keeps handler signatures unchanged.
+      const toolName = request.params.name;
+      const schema = ToolSchemas[toolName];
+      if (schema) {
+        const rawArgs = request.params.arguments ?? {};
+        const normalized = this.normalizeParameters(rawArgs);
+        const result = schema.safeParse(normalized);
+        if (!result.success) {
+          return this.createErrorResponse(
+            `Invalid arguments for ${toolName}: ${formatZodIssues(result.error.issues)}`,
+            ['Check the tool schema for required fields and types']
+          );
+        }
+        request.params.arguments = result.data;
+      }
+
+      switch (toolName) {
         case 'launch_editor':
           return await this.handleLaunchEditor(request.params.arguments);
         case 'run_project':
@@ -1100,7 +1135,7 @@ class GodotServer {
 
       process.stdout?.on('data', (data: Buffer) => {
         const lines = data.toString().split('\n');
-        output.push(...lines);
+        appendBounded(output, lines);
         lines.forEach((line: string) => {
           if (line.trim()) this.logDebug(`[Godot stdout] ${line}`);
         });
@@ -1108,7 +1143,7 @@ class GodotServer {
 
       process.stderr?.on('data', (data: Buffer) => {
         const lines = data.toString().split('\n');
-        errors.push(...lines);
+        appendBounded(errors, lines);
         lines.forEach((line: string) => {
           if (line.trim()) this.logDebug(`[Godot stderr] ${line}`);
         });
@@ -1435,8 +1470,7 @@ class GodotServer {
       // Extract project name from project.godot file
       let projectName = basename(args.projectPath);
       try {
-        const fs = require('fs');
-        const projectFileContent = fs.readFileSync(projectFile, 'utf8');
+        const projectFileContent = readFileSync(projectFile, 'utf8');
         const configNameMatch = projectFileContent.match(/config\/name="([^"]+)"/);
         if (configNameMatch && configNameMatch[1]) {
           projectName = configNameMatch[1];

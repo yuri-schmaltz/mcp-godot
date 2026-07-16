@@ -1,15 +1,13 @@
 # Godot MCP
 
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/Coding-Solo)
-
 [![](https://badge.mcpx.dev?type=server 'MCP Server')](https://modelcontextprotocol.io/introduction)
 [![Made with Godot](https://img.shields.io/badge/Made%20with-Godot-478CBF?style=flat&logo=godot%20engine&logoColor=white)](https://godotengine.org)
 [![](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white 'Node.js')](https://nodejs.org/en/download/)
 [![](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white 'TypeScript')](https://www.typescriptlang.org/)
 
-[![](https://img.shields.io/github/last-commit/Coding-Solo/godot-mcp 'Last Commit')](https://github.com/Coding-Solo/godot-mcp/commits/main)
-[![](https://img.shields.io/github/stars/Coding-Solo/godot-mcp 'Stars')](https://github.com/Coding-Solo/godot-mcp/stargazers)
-[![](https://img.shields.io/github/forks/Coding-Solo/godot-mcp 'Forks')](https://github.com/Coding-Solo/godot-mcp/network/members)
+[![](https://img.shields.io/github/last-commit/yuri-schmaltz/mcp-godot 'Last Commit')](https://github.com/yuri-schmaltz/mcp-godot/commits/quick-wins)
+[![](https://img.shields.io/github/stars/yuri-schmaltz/mcp-godot 'Stars')](https://github.com/yuri-schmaltz/mcp-godot/stargazers)
+[![](https://img.shields.io/github/forks/yuri-schmaltz/mcp-godot 'Forks')](https://github.com/yuri-schmaltz/mcp-godot/network/members)
 [![](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
 
 
@@ -89,7 +87,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 ### Claude Code
 
 ```bash
-claude mcp add godot -- npx @coding-solo/godot-mcp
+claude mcp add godot -- npx @yuri-schmaltz/mcp-godot
 ```
 
 That's it. Restart Claude Code and your Godot MCP tools are available.
@@ -97,7 +95,7 @@ That's it. Restart Claude Code and your Godot MCP tools are available.
 With environment variables:
 
 ```bash
-claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @coding-solo/godot-mcp
+claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @yuri-schmaltz/mcp-godot
 ```
 
 <details>
@@ -110,7 +108,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["@yuri-schmaltz/mcp-godot"],
       "env": {
         "DEBUG": "true"
       },
@@ -148,7 +146,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
 3. Fill out the form:
    - Name: `godot`
    - Type: `command`
-   - Command: `npx @coding-solo/godot-mcp`
+   - Command: `npx @yuri-schmaltz/mcp-godot`
 4. Click "Add"
 5. You may need to press the refresh button in the top right corner of the MCP server card to populate the tool list
 
@@ -161,7 +159,7 @@ Create a file at `.cursor/mcp.json` in your project directory:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["@yuri-schmaltz/mcp-godot"],
       "env": {
         "DEBUG": "true"
       }
@@ -182,7 +180,7 @@ For any MCP-compatible client, use this configuration:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["@yuri-schmaltz/mcp-godot"],
       "env": {
         "GODOT_PATH": "/path/to/godot",
         "DEBUG": "true"
@@ -205,8 +203,8 @@ For any MCP-compatible client, use this configuration:
 <summary><strong>Building from Source</strong></summary>
 
 ```bash
-git clone https://github.com/Coding-Solo/godot-mcp.git
-cd godot-mcp
+git clone https://github.com/yuri-schmaltz/mcp-godot.git
+cd mcp-godot
 npm install
 npm run build
 ```

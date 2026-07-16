@@ -1,4 +1,6 @@
 #!/usr/bin/env -S godot --headless --script
+# NOTE: The shebang above is documentation only. At runtime this file is invoked
+# via `godot --headless --path <project> --script <this-file> ...`, not directly.
 extends SceneTree
 
 # Debug mode flag

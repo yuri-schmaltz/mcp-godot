@@ -45,7 +45,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Project Structure
 
 ```
-godot-mcp/
+mcp-godot/
 ├── src/             # Source code
 │   └── index.ts     # Main server implementation
 ├── build/           # Compiled JavaScript (generated)
