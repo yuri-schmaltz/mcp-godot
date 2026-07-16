@@ -151,7 +151,7 @@ class GodotServer {
     // Initialize the MCP server
     this.server = new Server(
       {
-        name: 'godot-mcp',
+        name: '@yuri-schmaltz/mcp-godot',
         version: '0.1.0',
       },
       {
